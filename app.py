@@ -2,15 +2,18 @@ import os
 import json
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torchvision import models, transforms
 from PIL import Image
+import numpy as np
+import cv2
 import streamlit as st
 
 # Configure page
 st.set_page_config(
-    page_title="Brain Tumour Classifier",
+    page_title="Brain Tumour Classifier & Grad-CAM",
     page_icon="🧠",
-    layout="centered"
+    layout="wide"
 )
 
 CLASS_MAP = {
@@ -111,8 +114,23 @@ def load_all_models():
     return models_dict, load_errors
 
 
+def get_target_layer(model_name, model):
+    """
+    Returns the final convolutional layer for each model architecture:
+    - Custom CNN: features[6] (Conv2d 64->128)
+    - ResNet18: layer4[-1] (final BasicBlock of layer4)
+    - EfficientNet-B0: features[-1] (final Conv2dNormActivation block)
+    """
+    if model_name == "Custom CNN":
+        return model.features[6]
+    elif model_name == "ResNet18":
+        return model.layer4[-1]
+    elif model_name == "EfficientNet-B0":
+        return model.features[-1]
+    return None
+
+
 def get_preprocessing():
-    # Load exact metadata if available
     img_size = 224
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
@@ -148,12 +166,96 @@ def predict(image, model):
     class_label = CLASS_MAP.get(pred_key, f"Class {pred_key}")
     confidence_pct = conf.item() * 100.0
 
-    return class_label, confidence_pct, probabilities.numpy()
+    return pred_idx.item(), class_label, confidence_pct
+
+
+def compute_gradcam(model, target_layer, input_tensor, target_class):
+    """
+    Computes Grad-CAM heatmap for a given target class with gradients enabled.
+    Uses forward hook + tensor backward hook to avoid in-place operation conflicts.
+    """
+    gradients = []
+    activations = []
+
+    def forward_hook(module, inp, output):
+        activations.append(output)
+
+    def activation_grad_hook(grad):
+        gradients.append(grad)
+
+    f_handle = target_layer.register_forward_hook(forward_hook)
+
+    model.zero_grad()
+    # Forward pass with autograd active
+    outputs = model(input_tensor)
+
+    # Attach backward hook to the captured activation tensor
+    act = activations[0]
+    act.register_hook(activation_grad_hook)
+
+    # Target class logit
+    score = outputs[0, target_class]
+    score.backward()
+
+    f_handle.remove()
+
+    # Extract gradients and activations
+    grad = gradients[0][0]  # [C, H, W]
+    feature_map = act[0]   # [C, H, W]
+
+    # Global average pooling of gradients
+    weights = torch.mean(grad, dim=(1, 2), keepdim=True)  # [C, 1, 1]
+
+    # Weighted combination of forward activation maps
+    cam = torch.sum(weights * feature_map, dim=0)  # [H, W]
+
+    # ReLU to only keep features that positively contribute to the target class
+    cam = F.relu(cam)
+
+    # Normalize to [0, 1]
+    cam = cam - cam.min()
+    if cam.max() > 0:
+        cam = cam / cam.max()
+
+    return cam.detach().cpu().numpy()
+
+
+def generate_gradcam_visualizations(image, model, model_name, target_class):
+    """
+    Generates:
+    - heatmap (RGB image)
+    - overlay (RGB image blended onto original image)
+    """
+    transform = get_preprocessing()
+    input_tensor = transform(image).unsqueeze(0)
+    input_tensor.requires_grad_(True)
+
+    target_layer = get_target_layer(model_name, model)
+    cam = compute_gradcam(model, target_layer, input_tensor, target_class)
+
+    orig_np = np.array(image.convert("RGB"))
+    h, w = orig_np.shape[:2]
+
+    # Resize CAM to original image dimensions
+    cam_resized = cv2.resize(cam, (w, h), interpolation=cv2.INTER_LINEAR)
+    heatmap_uint8 = np.uint8(255 * cam_resized)
+
+    # Colorize with Jet colormap
+    heatmap_colored = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
+    heatmap_rgb = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
+
+    # Overlay heatmap onto original MRI
+    overlay = cv2.addWeighted(orig_np, 0.6, heatmap_rgb, 0.4, 0)
+
+    return heatmap_rgb, overlay
 
 
 def main():
-    st.title("🧠 Brain Tumour Classification")
-    st.write("Upload a brain MRI scan to predict the tumour type across all three trained models.")
+    st.title("🧠 Brain Tumour Classification & Grad-CAM Explainability")
+    st.write(
+        "Upload a brain MRI scan to predict the tumour type and visualize "
+        "Grad-CAM explainability across all three trained models."
+    )
 
     models_dict, load_errors = load_all_models()
 
@@ -169,28 +271,52 @@ def main():
     if uploaded_file is not None:
         try:
             image = Image.open(uploaded_file).convert("RGB")
-            st.image(image, caption="Uploaded MRI Scan", use_container_width=True)
         except Exception as e:
             st.error(f"Invalid image file: {e}")
             return
 
-        st.subheader("Model Predictions")
-        cols = st.columns(3)
+        st.markdown("---")
+        st.subheader("Model Predictions & Grad-CAM Visualizations")
 
         model_order = ["Custom CNN", "ResNet18", "EfficientNet-B0"]
 
-        for idx, model_name in enumerate(model_order):
-            with cols[idx]:
-                st.markdown(f"### {model_name}")
-                if model_name in models_dict:
-                    try:
-                        pred_class, confidence, _ = predict(image, models_dict[model_name])
-                        st.metric(label="Predicted Class", value=pred_class)
-                        st.metric(label="Confidence", value=f"{confidence:.2f}%")
-                    except Exception as e:
-                        st.error(f"Prediction failed: {e}")
-                else:
-                    st.error("Model unavailable")
+        for model_name in model_order:
+            st.markdown(f"### {model_name}")
+            if model_name not in models_dict:
+                st.error("Model unavailable.")
+                continue
+
+            model = models_dict[model_name]
+
+            try:
+                # 1. Run prediction
+                pred_idx, pred_class, confidence = predict(image, model)
+
+                # Metric summary
+                m_col1, m_col2 = st.columns([1, 1])
+                with m_col1:
+                    st.metric(label="Predicted Class", value=pred_class)
+                with m_col2:
+                    st.metric(label="Confidence", value=f"{confidence:.2f}%")
+
+                # 2. Generate Grad-CAM for the predicted class
+                heatmap_rgb, overlay = generate_gradcam_visualizations(
+                    image, model, model_name, target_class=pred_idx
+                )
+
+                # 3. Display Original, Heatmap, and Overlay side-by-side
+                v_col1, v_col2, v_col3 = st.columns(3)
+                with v_col1:
+                    st.image(image, caption="Original MRI", use_container_width=True)
+                with v_col2:
+                    st.image(heatmap_rgb, caption=f"{model_name} Grad-CAM Heatmap", use_container_width=True)
+                with v_col3:
+                    st.image(overlay, caption=f"{model_name} Grad-CAM Overlay", use_container_width=True)
+
+                st.markdown("---")
+
+            except Exception as e:
+                st.error(f"Error processing {model_name}: {e}")
 
 
 if __name__ == "__main__":
