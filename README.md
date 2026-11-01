@@ -4,7 +4,7 @@ A deep learning project for classifying brain tumours from MRI scans using three
 
 ##  Live Demo
 
-**Streamlit App:** [Try the live demo]((https://tumorclassifer.streamlit.app/))
+**Streamlit App:** [Try the live demo](https://tumorclassifer.streamlit.app)
 
 ##  Overview
 
