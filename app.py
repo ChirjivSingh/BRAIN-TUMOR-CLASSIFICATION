@@ -9,7 +9,6 @@ import numpy as np
 import cv2
 import streamlit as st
 
-# Configure page
 st.set_page_config(
     page_title="Brain Tumour Classifier & Grad-CAM",
     page_icon="🧠",
@@ -64,7 +63,6 @@ def load_all_models():
     models_dict = {}
     load_errors = {}
 
-    # 1. Custom CNN
     cnn_path = resolve_weight_path(MODEL_CANDIDATE_PATHS["Custom CNN"])
     if cnn_path:
         try:
@@ -79,7 +77,6 @@ def load_all_models():
     else:
         load_errors["Custom CNN"] = "Weight file not found"
 
-    # 2. ResNet18
     resnet_path = resolve_weight_path(MODEL_CANDIDATE_PATHS["ResNet18"])
     if resnet_path:
         try:
@@ -95,7 +92,6 @@ def load_all_models():
     else:
         load_errors["ResNet18"] = "Weight file not found"
 
-    # 3. EfficientNet-B0
     effnet_path = resolve_weight_path(MODEL_CANDIDATE_PATHS["EfficientNet-B0"])
     if effnet_path:
         try:
@@ -115,12 +111,6 @@ def load_all_models():
 
 
 def get_target_layer(model_name, model):
-    """
-    Returns the final convolutional layer for each model architecture:
-    - Custom CNN: features[6] (Conv2d 64->128)
-    - ResNet18: layer4[-1] (final BasicBlock of layer4)
-    - EfficientNet-B0: features[-1] (final Conv2dNormActivation block)
-    """
     if model_name == "Custom CNN":
         return model.features[6]
     elif model_name == "ResNet18":
@@ -145,12 +135,11 @@ def get_preprocessing():
         except Exception:
             pass
 
-    transform = transforms.Compose([
+    return transforms.Compose([
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
         transforms.Normalize(mean=mean, std=std)
     ])
-    return transform
 
 
 def predict(image, model):
@@ -170,10 +159,6 @@ def predict(image, model):
 
 
 def compute_gradcam(model, target_layer, input_tensor, target_class):
-    """
-    Computes Grad-CAM heatmap for a given target class with gradients enabled.
-    Uses forward hook + tensor backward hook to avoid in-place operation conflicts.
-    """
     gradients = []
     activations = []
 
@@ -186,33 +171,23 @@ def compute_gradcam(model, target_layer, input_tensor, target_class):
     f_handle = target_layer.register_forward_hook(forward_hook)
 
     model.zero_grad()
-    # Forward pass with autograd active
     outputs = model(input_tensor)
 
-    # Attach backward hook to the captured activation tensor
     act = activations[0]
     act.register_hook(activation_grad_hook)
 
-    # Target class logit
     score = outputs[0, target_class]
     score.backward()
 
     f_handle.remove()
 
-    # Extract gradients and activations
-    grad = gradients[0][0]  # [C, H, W]
-    feature_map = act[0]   # [C, H, W]
+    grad = gradients[0][0]
+    feature_map = act[0]
 
-    # Global average pooling of gradients
-    weights = torch.mean(grad, dim=(1, 2), keepdim=True)  # [C, 1, 1]
-
-    # Weighted combination of forward activation maps
-    cam = torch.sum(weights * feature_map, dim=0)  # [H, W]
-
-    # ReLU to only keep features that positively contribute to the target class
+    weights = torch.mean(grad, dim=(1, 2), keepdim=True)
+    cam = torch.sum(weights * feature_map, dim=0)
     cam = F.relu(cam)
 
-    # Normalize to [0, 1]
     cam = cam - cam.min()
     if cam.max() > 0:
         cam = cam / cam.max()
@@ -221,11 +196,6 @@ def compute_gradcam(model, target_layer, input_tensor, target_class):
 
 
 def generate_gradcam_visualizations(image, model, model_name, target_class):
-    """
-    Generates:
-    - heatmap (RGB image)
-    - overlay (RGB image blended onto original image)
-    """
     transform = get_preprocessing()
     input_tensor = transform(image).unsqueeze(0)
     input_tensor.requires_grad_(True)
@@ -236,15 +206,10 @@ def generate_gradcam_visualizations(image, model, model_name, target_class):
     orig_np = np.array(image.convert("RGB"))
     h, w = orig_np.shape[:2]
 
-    # Resize CAM to original image dimensions
     cam_resized = cv2.resize(cam, (w, h), interpolation=cv2.INTER_LINEAR)
     heatmap_uint8 = np.uint8(255 * cam_resized)
-
-    # Colorize with Jet colormap
     heatmap_colored = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
     heatmap_rgb = cv2.cvtColor(heatmap_colored, cv2.COLOR_BGR2RGB)
-
-    # Overlay heatmap onto original MRI
     overlay = cv2.addWeighted(orig_np, 0.6, heatmap_rgb, 0.4, 0)
 
     return heatmap_rgb, overlay
@@ -252,10 +217,7 @@ def generate_gradcam_visualizations(image, model, model_name, target_class):
 
 def main():
     st.title("🧠 Brain Tumour Classification & Grad-CAM Explainability")
-    st.write(
-        "Upload a brain MRI scan to predict the tumour type and visualize "
-        "Grad-CAM explainability across all three trained models."
-    )
+    st.write("Upload a brain MRI scan to predict the tumour type and visualize Grad-CAM explainability.")
 
     models_dict, load_errors = load_all_models()
 
@@ -289,22 +251,18 @@ def main():
             model = models_dict[model_name]
 
             try:
-                # 1. Run prediction
                 pred_idx, pred_class, confidence = predict(image, model)
 
-                # Metric summary
                 m_col1, m_col2 = st.columns([1, 1])
                 with m_col1:
                     st.metric(label="Predicted Class", value=pred_class)
                 with m_col2:
                     st.metric(label="Confidence", value=f"{confidence:.2f}%")
 
-                # 2. Generate Grad-CAM for the predicted class
                 heatmap_rgb, overlay = generate_gradcam_visualizations(
                     image, model, model_name, target_class=pred_idx
                 )
 
-                # 3. Display Original, Heatmap, and Overlay side-by-side
                 v_col1, v_col2, v_col3 = st.columns(3)
                 with v_col1:
                     st.image(image, caption="Original MRI", use_container_width=True)
