@@ -30,7 +30,7 @@ The application allows users to upload an MRI image, view predictions and confid
 ### Grad-CAM Visualization
 ![Grad-CAM Heatmap](Images/grad.png)
 
-## ⚙️ Technical Implementation
+## Implementation
 
 **1. Exploratory Data Analysis (EDA)**
 - Inspected MRI images and dataset structure.
