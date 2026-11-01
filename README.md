@@ -1,27 +1,80 @@
-# Brain Tumor Classification
+# Brain Tumour Classification & Explainability Using Grad-CAM
 
-A lightweight machine learning application to classify brain MRI images into three tumour types using deep learning.
+A deep learning project for classifying brain tumours from MRI scans using three different CNN-based architectures, with Grad-CAM visualizations to understand which image regions influence model predictions.
 
-## Models Evaluated
-- **Custom CNN**: Compact 3-layer convolutional network
-- **ResNet18**: Transfer learning with ResNet18 backbone
-- **EfficientNet-B0**: Pretrained EfficientNet-B0 fine-tuned for MRI classification
+##  Live Demo
 
-## Tumour Classes
-- **Class 1 (1.0)**: Meningioma
-- **Class 2 (2.0)**: Glioma
-- **Class 3 (3.0)**: Pituitary
+**Streamlit App:** [Try the Brain Tumour Classifier](https://xyz.streamlit.app)
 
-## How to Run
+##  Overview
 
-1. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+This project uses deep learning to classify brain MRI images into three tumour categories:
 
-2. Run the Streamlit app:
-   ```bash
-   streamlit run app.py
-   ```
+- **Glioma**
+- **Meningioma**
+- **Pituitary Tumour**
 
-3. Open your browser at `http://localhost:8501`, upload an MRI image (`.jpg`, `.jpeg`, `.png`), and compare the predictions from all three models.
+Three models were trained and evaluated:
+
+- Custom CNN
+- ResNet18
+- EfficientNet-B0
+
+The application allows users to upload an MRI image, view predictions and confidence scores from all three models, and visualize model attention using Grad-CAM.
+
+## Live Demo Preview
+
+### MRI Prediction Interface
+![MRI Prediction Interface](Images/ui.png)
+
+### Grad-CAM Visualization
+![Grad-CAM Heatmap](Images/grad.png)
+
+## ⚙️ Technical Implementation
+
+**1. Exploratory Data Analysis (EDA)**
+- Inspected MRI images and dataset structure.
+- Analysed class distribution and image dimensions.
+- Visualized sample images from each tumour category.
+
+**2. Preprocessing**
+- Extracted MRI images and labels from MATLAB `.mat` files.
+- Resized images to 224 × 224.
+- Normalized image pixel values.
+- Applied data augmentation during training.
+
+**3. Model Training**
+
+Three architectures were implemented and evaluated:
+
+- **Custom CNN:** A convolutional neural network built from scratch to establish a baseline.
+- **ResNet18:** A pretrained residual network using transfer learning.
+- **EfficientNet-B0:** A pretrained, computationally efficient architecture using transfer learning.
+
+**4. Model Evaluation**
+
+All three models were evaluated using accuracy, macro precision, macro recall, and macro F1-score.
+
+
+![Evaluation](Images/eval.png)
+
+EfficientNet-B0 achieved the highest test accuracy and macro F1-score among the three evaluated models.
+
+## Explainability using Grad-CAM
+
+Grad-CAM (Gradient-weighted Class Activation Mapping) is used to visualize image regions that contribute to a model's prediction.
+
+It generates heatmaps and overlays them on the original MRI scans, helping visualize which regions influence the classification decision.
+
+This provides a visual explanation of model behaviour, rather than treating predictions as black-box outputs.
+
+## Tech Stack
+- Python
+- PyTorch
+- NumPy
+- Pandas
+- Scikit-learn
+- Matplotlib
+- OpenCV
+- Streamlit
+
